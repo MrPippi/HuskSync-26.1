@@ -122,3 +122,6 @@ run/
 # Don't include generated test suite files
 /test/servers/
 /test/HuskSync
+
+# Local AI assistant context file
+CLAUDE.md

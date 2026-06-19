@@ -1,81 +1,87 @@
-# 上游同步流程（Upstream Sync）
+# Upstream Sync Workflow
 
-本 fork 與上游 [WiIIiam278/HuskSync](https://github.com/WiIIiam278/HuskSync) 的專案結構已**刻意分岔**：
+This fork's project structure has **intentionally diverged** from upstream
+[WiIIiam278/HuskSync](https://github.com/WiIIiam278/HuskSync):
 
-- 本 fork 保留全部 Bukkit `1.21.x` + Fabric 目標，並自帶 Paper **26.1.2** 模組。
-- 上游已移除 `1.21.x` 支援（PR #674），版本號走 `3.9.0`，並換用 neoforged licenser、gradle 9.5.1 等。
+- This fork keeps all Bukkit `1.21.x` + Fabric targets and ships its own Paper **26.1.2** module.
+- Upstream has **removed** `1.21.x` support (PR #674), moved to version `3.9.0`, switched to the
+  neoforged licenser, bumped to gradle 9.5.1, etc.
 
-因此**不可**直接 `git merge upstream/master` —— 會把上游的結構決策（刪版本、改 build、版本號）一併拉進來，造成大量衝突並破壞本 fork 結構。
+Because of this, **do not** run `git merge upstream/master` directly — it would pull in upstream's
+structural decisions (removed versions, build changes, version bumps) wholesale, causing large
+conflicts and breaking this fork's structure.
 
-正確做法：**把上游當零件倉庫，只 cherry-pick 需要的程式修復，跳過 infra。**
+The correct approach: **treat upstream as a parts bin — cherry-pick only the code fixes you need,
+and skip infra.**
 
 ---
 
-## 判斷準則：撈什麼、跳什麼
+## Decision Criteria: What to Pull vs Skip
 
-| 類型 | 範例檔案 | 動作 |
+| Type | Example files | Action |
 | --- | --- | --- |
-| **程式邏輯修復** | `common/src/.../*.java`、`bukkit/src/.../*.java`、`fabric/src/.../*.java` | ✅ cherry-pick |
-| 建置設定 | `build.gradle`、`gradle.properties`、`settings.gradle` | ❌ 跳過 |
-| CI / 發布 | `.github/workflows/*.yml` | ❌ 跳過 |
-| 版本 bump | 只改版本號的 commit | ❌ 跳過 |
-| 增刪版本支援 | 刪 `1.21.x`、改模組結構 | ❌ 跳過（與本 fork 衝突） |
+| **Code/logic fix** | `common/src/.../*.java`, `bukkit/src/.../*.java`, `fabric/src/.../*.java` | ✅ cherry-pick |
+| Build config | `build.gradle`, `gradle.properties`, `settings.gradle` | ❌ skip |
+| CI / release | `.github/workflows/*.yml` | ❌ skip |
+| Version bump | commits that only change the version number | ❌ skip |
+| Add/remove version support | removing `1.21.x`, restructuring modules | ❌ skip (conflicts with this fork) |
 
-> 重點：只有**改到實際執行行為**的 `.java` 修復才撈。infra 一律手動評估，預設跳過。
+> Key point: only pull `.java` fixes that **change actual runtime behavior**. Infra is evaluated
+> manually and skipped by default.
 
 ---
 
-## 操作步驟
+## Steps
 
-### 1. 抓上游最新狀態（只下載，不改程式）
+### 1. Fetch the latest upstream state (download only, no code changes)
 
 ```bash
 git fetch upstream
 ```
 
-### 2. 列出上游有、本 fork 沒有的 commit
+### 2. List commits upstream has that this fork doesn't
 
 ```bash
 git log --oneline master..upstream/master
 ```
 
-### 3. 檢視每個 commit 改了哪些檔案
+### 3. Inspect which files each commit changes
 
 ```bash
 git show --stat <hash>
 ```
 
-依上方準則篩出含 `src/.../*.java` 的真 bug 修復。
+Use the criteria above to pick out the genuine bug fixes touching `src/.../*.java`.
 
-### 4. 在獨立分支上套用（不直接動 master）
+### 4. Apply on an isolated branch (don't touch master directly)
 
 ```bash
 git checkout -b sync-upstream-fix
-git cherry-pick <hash>                 # 單一
-# git cherry-pick <hash1> <hash2>      # 多個分散
-# git cherry-pick <hashA>^..<hashB>    # 多個連續
+git cherry-pick <hash>                 # single
+# git cherry-pick <hash1> <hash2>      # several, scattered
+# git cherry-pick <hashA>^..<hashB>    # several, contiguous range
 ```
 
-### 5. 解衝突（若有）
+### 5. Resolve conflicts (if any)
 
 ```bash
-# 編輯衝突檔案後：
-git add <已解決檔案>
+# After editing the conflicted files:
+git add <resolved-files>
 git cherry-pick --continue
-# 或放棄：
+# Or abort:
 git cherry-pick --abort
 ```
 
-### 6. 建置驗證
+### 6. Build and verify
 
 ```bash
 ./gradlew :bukkit:26.1.2:compileJava
 ./gradlew :common:test
 ```
 
-> Windows：用 Git Bash 跑 `./gradlew`，或改 `gradlew.bat`。
+> Windows: run `./gradlew` under Git Bash, or use `gradlew.bat`.
 
-### 7. 併回 master 並推送
+### 7. Merge back to master and push
 
 ```bash
 git checkout master
@@ -83,20 +89,25 @@ git merge sync-upstream-fix
 git push origin master
 ```
 
-> 注意：推 `master` 會觸發 `ci.yml` 發布 alpha artifact。
+> Note: pushing to `master` triggers `ci.yml`, which publishes an alpha artifact.
 
 ---
 
-## 重要觀念
+## Key Concepts
 
-- 全程**手動**，無自動排程、無背景觸發。
-- `cherry-pick` 只套到**當前所在分支**，且只動**本地**——`git push` 後才上 GitHub。
-- 在分支上操作 → master 永遠乾淨，出錯隨時 `git branch -D sync-upstream-fix` 丟掉。
+- Everything is **manual** — no scheduled jobs, no background triggers.
+- `cherry-pick` applies only to the **branch you're currently on**, and only **locally** — it
+  reaches GitHub only after `git push`.
+- Working on a branch keeps master clean — if something goes wrong, just drop it with
+  `git branch -D sync-upstream-fix`.
 
 ---
 
-## 現況快照（2026-06-19）
+## Current Snapshot (2026-06-19)
 
-上游 `master` 領先本 fork 的 commit **全為 infra**（Paper 26.1.2 build、刪 1.21.x、Java 25 設定、gradle 9.5.1、版本 bump、CI 精簡），**無任何程式 bug 修復**。其中 `DataVersionSupplier` 的 `VERSION26_1 = 4786` 與本 fork 完全一致。
+All commits upstream `master` is ahead by are **infra-only** (Paper 26.1.2 build, 1.21.x removal,
+Java 25 config, gradle 9.5.1, version bump, CI cleanup) — **no code bug fixes**. The
+`DataVersionSupplier` value `VERSION26_1 = 4786` is identical to this fork's.
 
-→ **目前無需 cherry-pick 任何 commit。** 本流程供未來上游出現 `.java` 修復時使用。
+→ **No commits need cherry-picking right now.** This workflow exists for the future, when upstream
+ships a `.java` fix worth porting.

@@ -109,7 +109,7 @@ public interface BukkitUserDataHolder extends UserDataHolder {
     @NotNull
     @Override
     default Optional<Data.Statistics> getStatistics() {
-        return Optional.of(BukkitData.Statistics.adapt(getPlayer()));
+        return Optional.of(BukkitData.Statistics.adapt(getPlayer(), getPlugin()));
     }
 
     @NotNull

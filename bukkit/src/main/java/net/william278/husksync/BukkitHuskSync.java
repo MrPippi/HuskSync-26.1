@@ -77,6 +77,8 @@ import space.arim.morepaperlib.scheduling.RegionalScheduler;
 
 import java.nio.file.Path;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.function.Supplier;
 import java.util.logging.Level;
 import java.util.stream.Collectors;
 
@@ -395,6 +397,58 @@ public class BukkitHuskSync extends JavaPlugin implements HuskSync, BukkitTask.S
     @NotNull
     public AttachedScheduler getUserSyncScheduler(@NotNull UserDataHolder user) {
         return getScheduler().entitySpecificScheduler(((BukkitUser) user).getPlayer());
+    }
+
+    /**
+     * Whether the current thread already owns the region ticking the given player.
+     * On Folia this is the entity's owning region thread; on Paper/Spigot it is the main thread.
+     */
+    public boolean isOnPlayerThread(@NotNull Player player) {
+        return getScheduler().isUsingFolia()
+                ? getServer().isOwnedByCurrentRegion(player)
+                : getServer().isPrimaryThread();
+    }
+
+    /**
+     * Runs the supplier on the player's owning region thread (Folia) or main thread (Paper/Spigot)
+     * and blocks until it returns. If already on the correct thread the supplier runs inline to avoid
+     * deadlock. Folia-safe replacement for {@code Bukkit.getScheduler().callSyncMethod(...)}.
+     *
+     * @throws IllegalStateException if the player is removed before the task can run, or the task fails
+     */
+    public <T> T supplyOnPlayerThread(@NotNull Player player, @NotNull Supplier<T> supplier) {
+        if (isOnPlayerThread(player)) {
+            return supplier.get();
+        }
+        final CompletableFuture<T> future = new CompletableFuture<>();
+        getScheduler().entitySpecificScheduler(player).run(
+                () -> {
+                    try {
+                        future.complete(supplier.get());
+                    } catch (Throwable t) {
+                        future.completeExceptionally(t);
+                    }
+                },
+                () -> future.completeExceptionally(
+                        new IllegalStateException("Player removed before task could run on its region thread"))
+        );
+        try {
+            return future.join();
+        } catch (Throwable t) {
+            throw new IllegalStateException("Failed to run task on player's region thread", t.getCause() != null
+                    ? t.getCause() : t);
+        }
+    }
+
+    /**
+     * Runs the action on the player's owning region thread (Folia) or main thread (Paper/Spigot)
+     * and blocks until it completes. Void variant of {@link #supplyOnPlayerThread(Player, Supplier)}.
+     */
+    public void runOnPlayerThread(@NotNull Player player, @NotNull Runnable action) {
+        supplyOnPlayerThread(player, () -> {
+            action.run();
+            return null;
+        });
     }
 
     @Override

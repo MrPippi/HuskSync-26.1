@@ -41,7 +41,6 @@ import org.bukkit.event.inventory.InventoryType;
 import org.bukkit.inventory.EquipmentSlotGroup;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.persistence.PersistentDataContainer;
-import org.bukkit.plugin.Plugin;
 import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
 import org.jetbrains.annotations.NotNull;
@@ -471,7 +470,13 @@ public abstract class BukkitData implements Data {
         private Map<String, Map<String, Integer>> entityStatistics;
 
         @NotNull
-        public static BukkitData.Statistics adapt(@NotNull Player player) {
+        public static BukkitData.Statistics adapt(@NotNull Player player, @NotNull HuskSync plugin) {
+            final BukkitHuskSync bukkit = (BukkitHuskSync) plugin;
+            if (!bukkit.isOnPlayerThread(player)) {
+                // On Folia the snapshot capture runs async; read statistics on the player's region thread
+                // so the read is atomic w.r.t. concurrent mutation (prevents torn/stale stat regression).
+                return bukkit.supplyOnPlayerThread(player, () -> adapt(player, plugin));
+            }
             final Map<String, Integer> generic = Maps.newHashMap();
             final Map<String, Map<String, Integer>> blocks = Maps.newHashMap(),
                     items = Maps.newHashMap(), entities = Maps.newHashMap();
@@ -525,6 +530,10 @@ public abstract class BukkitData implements Data {
 
         @Override
         public void apply(@NotNull BukkitUser user, @NotNull BukkitHuskSync p) {
+            if (!p.isOnPlayerThread(user.getPlayer())) {
+                p.runOnPlayerThread(user.getPlayer(), () -> this.apply(user, p));
+                return;
+            }
             genericStatistics.forEach((k, v) -> applyStat(p, user, k, Statistic.Type.UNTYPED, v));
             blockStatistics.forEach((k, m) -> m.forEach((b, v) -> applyStat(p, user, k, Statistic.Type.BLOCK, v, b)));
             itemStatistics.forEach((k, m) -> m.forEach((i, v) -> applyStat(p, user, k, Statistic.Type.ITEM, v, i)));
@@ -598,12 +607,9 @@ public abstract class BukkitData implements Data {
 
         @NotNull
         public static BukkitData.Attributes adapt(@NotNull Player player, @NotNull HuskSync plugin) {
-            if (!Bukkit.isPrimaryThread()) {
-                try {
-                    return Bukkit.getScheduler().callSyncMethod((Plugin) plugin, () -> adapt(player, plugin)).get();
-                } catch (Exception e) {
-                    throw new IllegalStateException("Failed to adapt attributes on main thread", e);
-                }
+            final BukkitHuskSync bukkit = (BukkitHuskSync) plugin;
+            if (!bukkit.isOnPlayerThread(player)) {
+                return bukkit.supplyOnPlayerThread(player, () -> adapt(player, plugin));
             }
 
             final List<Attribute> attributes = Lists.newArrayList();
@@ -679,16 +685,9 @@ public abstract class BukkitData implements Data {
 
         @Override
         public void apply(@NotNull BukkitUser user, @NotNull BukkitHuskSync plugin) throws IllegalStateException {
-            if (!Bukkit.isPrimaryThread()) {
-                try {
-                    Bukkit.getScheduler().callSyncMethod(plugin, () -> {
-                        this.apply(user, plugin);
-                        return null;
-                    }).get();
-                    return;
-                } catch (Exception e) {
-                    throw new IllegalStateException("Failed to apply attributes on main thread", e);
-                }
+            if (!plugin.isOnPlayerThread(user.getPlayer())) {
+                plugin.runOnPlayerThread(user.getPlayer(), () -> this.apply(user, plugin));
+                return;
             }
 
             final AttributeSettings settings = plugin.getSettings().getSynchronization().getAttributes();
@@ -749,13 +748,9 @@ public abstract class BukkitData implements Data {
         @Override
         @SuppressWarnings("deprecation")
         public void apply(@NotNull BukkitUser user, @NotNull BukkitHuskSync plugin) throws IllegalStateException {
-            if (!Bukkit.isPrimaryThread()) {
-                try {
-                    Bukkit.getScheduler().callSyncMethod(plugin, () -> { this.apply(user, plugin); return null; }).get();
-                    return;
-                } catch (Exception e) {
-                    throw new IllegalStateException("Failed to apply health on main thread", e);
-                }
+            if (!plugin.isOnPlayerThread(user.getPlayer())) {
+                plugin.runOnPlayerThread(user.getPlayer(), () -> this.apply(user, plugin));
+                return;
             }
             final Player player = user.getPlayer();
 
